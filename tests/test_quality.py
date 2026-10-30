@@ -1,5 +1,7 @@
 
-import pytest
+"""
+Tests for data quality validation utilities.
+"""
 
 from pyspark.sql import functions as F
 
@@ -26,7 +28,7 @@ def test_quality_checks_pass_with_valid_data(
         expected_record_count=4,
     )
 
-    assert len(results) == 9
+    assert len(results) == 10
     assert all(result["passed"] for result in results)
 
 
@@ -131,3 +133,87 @@ def test_quality_detects_inconsistent_missing_flags(
     )
 
     assert missing_check["passed"] is False
+
+
+def test_quality_detects_inconsistent_valid_flags(
+    bronze_df,
+    silver_df,
+):
+    """Test detection of inconsistent valid rental flags."""
+
+    inconsistent_silver = silver_df.withColumn(
+        "is_valid_rent",
+        F.lit(False),
+    )
+
+    gold_tables = build_gold_tables(inconsistent_silver)
+
+    results = run_quality_checks(
+        bronze_df=bronze_df,
+        silver_df=inconsistent_silver,
+        gold_tables=gold_tables,
+        expected_record_count=4,
+    )
+
+    valid_check = next(
+        result for result in results
+        if result["check"] == "Valid value flags are consistent"
+    )
+
+    assert valid_check["passed"] is False
+
+
+def test_quality_detects_invalid_reporting_periods(
+    bronze_df,
+    silver_df,
+):
+    """Test detection of invalid reporting periods."""
+
+    invalid_silver = silver_df.withColumn(
+        "quarter_start_date",
+        F.lit(None).cast("date"),
+    )
+
+    gold_tables = build_gold_tables(invalid_silver)
+
+    results = run_quality_checks(
+        bronze_df=bronze_df,
+        silver_df=invalid_silver,
+        gold_tables=gold_tables,
+        expected_record_count=4,
+    )
+
+    period_check = next(
+        result for result in results
+        if result["check"] == "Reporting periods are valid"
+    )
+
+    assert period_check["passed"] is False
+
+
+def test_quality_detects_gold_reconciliation_errors(
+    bronze_df,
+    silver_df,
+):
+    """Test detection of differences between Silver and Gold trends."""
+
+    gold_tables = build_gold_tables(silver_df)
+
+    gold_tables["gold_dublin_rent_trends"] = (
+        gold_tables["gold_dublin_rent_trends"]
+        .filter(F.col("quarter_code") != "2024Q1")
+    )
+
+    results = run_quality_checks(
+        bronze_df=bronze_df,
+        silver_df=silver_df,
+        gold_tables=gold_tables,
+        expected_record_count=4,
+    )
+
+    reconciliation_check = next(
+        result for result in results
+        if result["check"] == "Gold trends reconcile with Silver"
+    )
+
+    assert reconciliation_check["passed"] is False
