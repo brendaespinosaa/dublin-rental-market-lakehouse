@@ -2,28 +2,31 @@
 
 An end-to-end data engineering project that processes official Irish rental market data using **Databricks, Apache Spark, PySpark, Delta Lake, and the Medallion Architecture**.
 
-The project transforms raw statistical data from Ireland's Central Statistics Office (CSO) into structured and validated analytical datasets, focusing on rental market trends in Dublin.
+The project transforms raw statistical data from Ireland's Central Statistics Office (CSO) into structured, validated, and analytical datasets, focusing on rental market trends in Dublin.
 
 ## Project Overview
 
-The objective is to build a scalable and organized data processing workflow that demonstrates key data engineering concepts, including:
+The objective is to develop a modular and scalable data processing pipeline that demonstrates key data engineering concepts, including:
 
 - Data ingestion from an official statistical API.
-- Data processing and transformation with PySpark.
+- JSON-stat data extraction and dimensional metadata handling.
+- Distributed data processing with PySpark.
 - Medallion Architecture implementation (Bronze, Silver, and Gold).
-- Delta Lake storage.
+- Delta Lake storage and table management.
 - Data quality validation and reconciliation.
-- Analytical data modeling.
+- Modular Python development.
+- Automated testing with Pytest.
 
 ## Architecture
 
-The project follows the **Medallion Architecture**, separating data processing into three layers.
+The project follows the **Medallion Architecture**, organizing data processing into three layers.
 
 ### Bronze — Raw Data Ingestion
 
 - Ingests the official CSO Ireland JSON-stat dataset.
 - Extracts observations and dimensional metadata.
-- Converts the source data into a structured Spark DataFrame.
+- Decodes flattened JSON-stat observations into structured records.
+- Preserves original source values and missing observations.
 - Stores the raw observations in Delta Lake.
 
 ### Silver — Data Transformation
@@ -44,7 +47,7 @@ Creates four analytical Delta tables:
 | `gold_dublin_rent_trends` | Quarterly rental trends for Dublin. |
 | `gold_dublin_rent_by_property_type` | Rental values by property type. |
 | `gold_dublin_rent_by_bedrooms` | Rental values by bedroom category. |
-| `gold_dublin_rent_by_location` | Rental comparisons across Dublin geographic categories. |
+| `gold_dublin_rent_by_location` | Rental comparisons across detailed Dublin geographic categories. |
 
 **Geographic consideration:** CSO location categories may overlap. Therefore, detailed geographic categories are treated as separate comparisons and must not be summed as if they were mutually exclusive regions.
 
@@ -56,6 +59,7 @@ Creates four analytical Delta tables:
 - Coverage: 2007 Q4 to 2025 Q4.
 - Format: JSON-stat.
 - Measurement: Average monthly rent in EUR.
+- Total observations: 1,367,436.
 
 Official API:
 
@@ -63,13 +67,15 @@ Official API:
 
 ## Key Findings
 
-The processed dataset provides insights into Dublin's rental market.
+The processed dataset provides insights into Dublin's historical rental market.
 
 | Metric | Result |
 |---|---:|
 | Source observations | 1,367,436 |
 | Valid rental observations | 376,988 |
 | Missing observations | 990,448 |
+| Valid observations | 27.57% |
+| Missing observations | 72.43% |
 | Historical coverage | 2007 Q4 – 2025 Q4 |
 | Dublin quarterly trend records | 73 |
 
@@ -98,23 +104,24 @@ Values are not adjusted for inflation.
 
 ## Data Quality
 
-The pipeline includes automated validation checks to ensure data consistency and reliability.
+The project implements automated data quality validation to ensure consistency across the Medallion layers.
 
-The current validation suite includes nine checks:
+The modular validation module includes **10 quality checks**:
 
-- Source-to-Bronze record reconciliation.
-- Bronze-to-Silver record reconciliation.
-- Dimensional uniqueness.
-- Rental value consistency.
-- Missing value flag consistency.
-- Valid value flag consistency.
-- Reporting period validation.
-- Gold data validity.
-- Silver-to-Gold reconciliation.
+1. Source-to-Bronze record count reconciliation.
+2. Bronze-to-Silver record count reconciliation.
+3. Dimensional uniqueness.
+4. Rental value consistency.
+5. Missing value flag consistency.
+6. Valid value flag consistency.
+7. Reporting period validation.
+8. Gold data validity.
+9. Gold quarterly trend uniqueness.
+10. Silver-to-Gold reconciliation.
 
-**Latest validation result: 9/9 checks passed.**
+The project also includes an independent Pytest suite covering ingestion, transformations, and data quality validation.
 
-Independent Pytest implementation is planned as a subsequent development stage.
+**Test execution and final results are pending.**
 
 ## Technology Stack
 
@@ -122,10 +129,11 @@ Independent Pytest implementation is planned as a subsequent development stage.
 |---|---|
 | Databricks Free Edition | Development and execution environment |
 | Apache Spark | Distributed data processing |
-| PySpark | Data transformation |
+| PySpark | Data ingestion and transformation |
 | Delta Lake | Data storage and table management |
-| Python | Data engineering logic |
+| Python | Modular data engineering logic |
 | SQL | Data exploration and validation |
+| Pytest | Automated testing |
 | Git & GitHub | Version control and documentation |
 
 ## Repository Structure
@@ -143,13 +151,28 @@ dublin-rental-market-lakehouse/
 │
 ├── src/
 │   ├── ingestion/
+│   │   ├── jsonstat_ingestion.py
+│   │   └── .gitkeep
+│   │
 │   ├── transformations/
+│   │   ├── bronze.py
+│   │   ├── silver.py
+│   │   ├── gold.py
+│   │   └── .gitkeep
+│   │
 │   └── quality/
+│       ├── validation.py
+│       └── .gitkeep
 │
 ├── tests/
-│   └── __init__.py
+│   ├── __init__.py
+│   ├── conftest.py
+│   ├── test_ingestion.py
+│   ├── test_transformations.py
+│   └── test_quality.py
 │
 ├── .gitignore
+├── requirements.txt
 └── README.md
 ```
 
@@ -157,9 +180,13 @@ dublin-rental-market-lakehouse/
 
 The project is developed using Databricks Free Edition.
 
-The current implementation runs in a Databricks notebook and uses a Unity Catalog volume to store the source JSON-stat file.
+The current implementation uses a Unity Catalog volume to store the source JSON-stat file.
 
-To explore the project:
+**Source file location:**
+
+`/Volumes/workspace/dublin_rental_market/raw_files/rtb_average_monthly_rent.json`
+
+To explore the Databricks implementation:
 
 1. Clone or download this repository.
 2. Import the notebook into your Databricks workspace.
@@ -167,19 +194,28 @@ To explore the project:
 4. Upload the JSON-stat file to the configured Unity Catalog volume.
 5. Execute the notebook cells sequentially.
 
-The notebook contains the ingestion, transformation, analytical modeling, and data quality validation workflows.
+The notebook contains the original ingestion, transformation, analytical modeling, and data quality workflows.
+
+The modular Python implementation and automated tests are maintained separately in `src/` and `tests/`.
 
 ## Project Status
 
-- [x] Source data exploration.
+- [x] Official source data exploration.
+- [x] JSON-stat structure analysis.
 - [x] Bronze layer implementation.
 - [x] Silver layer implementation.
-- [x] Gold analytical tables.
+- [x] Gold analytical datasets.
 - [x] Initial data quality validation.
-- [x] Architecture documentation.
-- [ ] Modular Python implementation.
-- [ ] Independent Pytest implementation.
-- [ ] Final documentation and project refinement.
+- [x] Medallion Architecture documentation.
+- [x] Modular Python ingestion implementation.
+- [x] Modular Bronze, Silver, and Gold transformations.
+- [x] Modular data quality validation.
+- [x] Pytest test suite implementation.
+- [x] Python and Java local environment preparation.
+- [ ] Local dependency installation and environment configuration.
+- [ ] Automated test execution and issue resolution.
+- [ ] Integration of modular Python code with the Databricks notebook.
+- [ ] Final documentation review.
 
 ## Author
 
