@@ -1,4 +1,8 @@
 
+"""
+Shared pytest fixtures for the Dublin Rental Market Lakehouse tests.
+"""
+
 import pytest
 
 from pyspark.sql import SparkSession
@@ -9,23 +13,32 @@ from src.transformations.silver import build_silver_dataframe
 
 @pytest.fixture(scope="session")
 def spark():
-    """Create a shared local Spark session for the test suite."""
+    """
+    Create a shared local Spark session for the test suite.
+    """
 
     session = (
         SparkSession.builder
         .master("local[2]")
         .appName("DublinRentalMarketTests")
         .config("spark.ui.enabled", "false")
+        .config("spark.sql.shuffle.partitions", "2")
+        .config("spark.driver.bindAddress", "127.0.0.1")
         .getOrCreate()
     )
 
+    session.sparkContext.setLogLevel("ERROR")
+
     yield session
+
     session.stop()
 
 
 @pytest.fixture
 def sample_jsonstat_metadata():
-    """Provide a small JSON-stat structure for testing."""
+    """
+    Provide a small JSON-stat structure for testing.
+    """
 
     dimension_ids = [
         "STATISTIC",
@@ -41,7 +54,7 @@ def sample_jsonstat_metadata():
         "STATISTIC": {
             "codes": ["RIQ02"],
             "labels": {
-                "RIQ02": "RTB Average Monthly Rent Report"
+                "RIQ02": "RTB Average Monthly Rent Report",
             },
         },
         "TLIST(Q1)": {
@@ -53,7 +66,9 @@ def sample_jsonstat_metadata():
         },
         "C02970V03592": {
             "codes": ["-"],
-            "labels": {"-": "All bedrooms"},
+            "labels": {
+                "-": "All bedrooms",
+            },
         },
         "C02969V03591": {
             "codes": ["-", "04"],
@@ -64,7 +79,9 @@ def sample_jsonstat_metadata():
         },
         "C03004V03625": {
             "codes": ["120500"],
-            "labels": {"120500": "Dublin"},
+            "labels": {
+                "120500": "Dublin",
+            },
         },
     }
 
@@ -72,24 +89,67 @@ def sample_jsonstat_metadata():
 
 
 @pytest.fixture
-def bronze_df(spark, sample_jsonstat_metadata):
-    """Create a sample Bronze DataFrame."""
+def sample_observations():
+    """
+    Provide sample rental observations in JSON-stat flattened order.
+    """
+
+    return [1000.0, 1100.0, 1200.0, 1300.0]
+
+
+@pytest.fixture
+def bronze_df(
+    spark,
+    sample_jsonstat_metadata,
+    sample_observations,
+):
+    """
+    Create a sample Bronze DataFrame.
+    """
 
     dimension_ids, dimension_sizes, metadata = sample_jsonstat_metadata
 
-    observations = [1000.0, 1100.0, 1200.0, 1300.0]
-
     return build_bronze_dataframe(
-        spark,
-        observations,
-        dimension_ids,
-        dimension_sizes,
-        metadata,
+        spark=spark,
+        observations=sample_observations,
+        dimension_ids=dimension_ids,
+        dimension_sizes=dimension_sizes,
+        dimension_metadata=metadata,
     )
 
 
 @pytest.fixture
 def silver_df(bronze_df):
-    """Create a sample Silver DataFrame."""
+    """
+    Create a sample Silver DataFrame.
+    """
 
     return build_silver_dataframe(bronze_df)
+
+
+@pytest.fixture
+def bronze_df_with_null(bronze_df):
+    """
+    Create a Bronze DataFrame containing a missing rental value.
+    """
+
+    from pyspark.sql import functions as F
+
+    return bronze_df.withColumn(
+        "average_monthly_rent_eur",
+        F.when(
+            F.col("average_monthly_rent_eur") == 1000.0,
+            F.lit(None).cast("double"),
+        ).otherwise(
+            F.col("average_monthly_rent_eur")
+        ),
+    )
+
+
+@pytest.fixture
+def silver_df_with_null(bronze_df_with_null):
+    """
+    Create a Silver DataFrame containing a missing rental value.
+    """
+
+    return build_silver_dataframe(bronze_df_with_null)
