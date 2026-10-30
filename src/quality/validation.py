@@ -10,6 +10,17 @@ from pyspark.sql import DataFrame
 from pyspark.sql import functions as F
 
 
+DUBLIN_AGGREGATE_CODE = "120500"
+
+DIMENSION_COLUMNS = [
+    "statistic_code",
+    "quarter_code",
+    "bedroom_code",
+    "property_type_code",
+    "location_code",
+]
+
+
 def run_quality_checks(
     bronze_df: DataFrame,
     silver_df: DataFrame,
@@ -28,6 +39,40 @@ def run_quality_checks(
     Returns:
         List of quality check results.
     """
+
+    required_gold_tables = {
+        "gold_dublin_rent_trends",
+        "gold_dublin_rent_by_property_type",
+        "gold_dublin_rent_by_bedrooms",
+        "gold_dublin_rent_by_location",
+    }
+
+    missing_gold_tables = required_gold_tables - set(gold_tables)
+
+    if missing_gold_tables:
+        raise ValueError(
+            f"Missing required Gold tables: {sorted(missing_gold_tables)}"
+        )
+
+    required_silver_columns = set(
+        DIMENSION_COLUMNS
+        + [
+            "average_monthly_rent_eur",
+            "is_missing_rent",
+            "is_valid_rent",
+            "year",
+            "quarter_number",
+            "quarter_start_date",
+        ]
+    )
+
+    missing_silver_columns = required_silver_columns - set(silver_df.columns)
+
+    if missing_silver_columns:
+        raise ValueError(
+            f"Missing required Silver columns: "
+            f"{sorted(missing_silver_columns)}"
+        )
 
     results = []
 
@@ -60,17 +105,9 @@ def run_quality_checks(
     )
 
     # 3. No duplicate dimensional combinations.
-    dimension_columns = [
-        "statistic_code",
-        "quarter_code",
-        "bedroom_code",
-        "property_type_code",
-        "location_code",
-    ]
-
     duplicate_count = (
         silver_df
-        .groupBy(*dimension_columns)
+        .groupBy(*DIMENSION_COLUMNS)
         .count()
         .filter(F.col("count") > 1)
         .count()
@@ -133,7 +170,7 @@ def run_quality_checks(
         f"Inconsistent flags: {inconsistent_valid_count}",
     )
 
-    # 7. Reporting periods are valid.
+    # 7. Reporting periods are valid and internally consistent.
     invalid_period_count = (
         silver_df
         .filter(
@@ -141,6 +178,14 @@ def run_quality_checks(
             | F.col("quarter_number").isNull()
             | F.col("quarter_start_date").isNull()
             | (~F.col("quarter_number").between(1, 4))
+            | (
+                F.year("quarter_start_date")
+                != F.col("year")
+            )
+            | (
+                F.quarter("quarter_start_date")
+                != F.col("quarter_number")
+            )
         )
         .count()
     )
@@ -155,6 +200,11 @@ def run_quality_checks(
     gold_invalid_count = 0
 
     for table_name, gold_df in gold_tables.items():
+        if "average_monthly_rent_eur" not in gold_df.columns:
+            raise ValueError(
+                f"Missing rental value column in Gold table: {table_name}"
+            )
+
         invalid_count = (
             gold_df
             .filter(
@@ -176,12 +226,68 @@ def run_quality_checks(
     trends_df = gold_tables["gold_dublin_rent_trends"]
 
     trend_count = trends_df.count()
-    distinct_quarters = trends_df.select("quarter_code").distinct().count()
+
+    distinct_quarters = (
+        trends_df
+        .select("quarter_code")
+        .distinct()
+        .count()
+    )
 
     add_result(
         "Gold trends have unique quarterly records",
         trend_count == distinct_quarters,
         f"Records: {trend_count}; Distinct quarters: {distinct_quarters}",
+    )
+
+    # 10. Gold trends reconcile with the corresponding Silver records.
+    expected_trends = (
+        silver_df
+        .filter(
+            (F.col("location_code") == DUBLIN_AGGREGATE_CODE)
+            & (F.col("bedroom_code") == "-")
+            & (F.col("property_type_code") == "-")
+            & (F.col("is_valid_rent") == True)
+        )
+        .select(
+            "quarter_code",
+            "quarter",
+            "year",
+            "quarter_number",
+            "quarter_start_date",
+            "location_code",
+            "location",
+            "average_monthly_rent_eur",
+        )
+    )
+
+    actual_trends = trends_df.select(
+        "quarter_code",
+        "quarter",
+        "year",
+        "quarter_number",
+        "quarter_start_date",
+        "location_code",
+        "location",
+        "average_monthly_rent_eur",
+    )
+
+    missing_in_gold = expected_trends.exceptAll(actual_trends).count()
+
+    unexpected_in_gold = actual_trends.exceptAll(expected_trends).count()
+
+    reconciliation_passed = (
+        missing_in_gold == 0
+        and unexpected_in_gold == 0
+    )
+
+    add_result(
+        "Gold trends reconcile with Silver",
+        reconciliation_passed,
+        (
+            f"Missing in Gold: {missing_in_gold}; "
+            f"Unexpected in Gold: {unexpected_in_gold}"
+        ),
     )
 
     return results
@@ -196,7 +302,11 @@ def summarize_quality_results(results: list[dict]) -> dict:
     """
 
     total_checks = len(results)
-    passed_checks = sum(result["passed"] for result in results)
+
+    passed_checks = sum(
+        result["passed"] for result in results
+    )
+
     failed_checks = total_checks - passed_checks
 
     return {
