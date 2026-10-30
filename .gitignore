@@ -218,3 +218,32 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+# Databricks
+.databricks/
+
+# Spark
+spark-warehouse/
+metastore_db/
+
+# Data files
+data/raw/
+data/processed/
+data/*.json
+data/*.csv
+data/*.parquet
+data/*.delta
+
+# Environment variables and credentials
+.env
+.env.*
+!.env.example
+
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+
+# Logs
+logs/
+*.log
