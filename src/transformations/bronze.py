@@ -6,14 +6,14 @@ Converts flattened JSON-stat observations into a structured
 Spark DataFrame while preserving source values and metadata.
 """
 
+from math import prod
+
 from pyspark.sql import SparkSession, functions as F
 from pyspark.sql.types import (
     StructType,
     StructField,
-    StringType,
     DoubleType,
     LongType,
-    TimestampType,
 )
 
 
@@ -39,11 +39,17 @@ def build_bronze_dataframe(
     """
 
     if len(dimension_ids) != len(dimension_sizes):
-        raise ValueError("Dimension identifiers and sizes do not match.")
+        raise ValueError(
+            "Dimension identifiers and sizes do not match."
+        )
 
-    expected_count = 1
-    for size in dimension_sizes:
-        expected_count *= size
+    if len(dimension_ids) != len(set(dimension_ids)):
+        raise ValueError("Duplicate dimension identifiers found.")
+
+    if any(size <= 0 for size in dimension_sizes):
+        raise ValueError("Dimension sizes must be positive.")
+
+    expected_count = prod(dimension_sizes)
 
     if len(observations) != expected_count:
         raise ValueError(
@@ -60,77 +66,134 @@ def build_bronze_dataframe(
     }
 
     if not required_dimensions.issubset(set(dimension_ids)):
-        raise ValueError("One or more required dimensions are missing.")
+        missing_dimensions = required_dimensions - set(dimension_ids)
 
-    dimension_positions = {
-        dimension_id: dimension_ids.index(dimension_id)
-        for dimension_id in dimension_ids
-    }
-
-    def get_stride(position):
-        return expected_count // (
-            dimension_sizes[position]
-            * __import__("math").prod(dimension_sizes[position + 1:])
+        raise ValueError(
+            f"Required dimensions are missing: {sorted(missing_dimensions)}"
         )
 
-    def build_lookup(dimension_id):
-        position = dimension_positions[dimension_id]
+    for dimension_id, dimension_size in zip(
+        dimension_ids, dimension_sizes
+    ):
+        if dimension_id not in dimension_metadata:
+            raise ValueError(
+                f"Metadata not found for dimension: {dimension_id}"
+            )
+
+        codes = dimension_metadata[dimension_id].get("codes", [])
+        labels = dimension_metadata[dimension_id].get("labels", {})
+
+        if len(codes) != dimension_size:
+            raise ValueError(
+                f"Category count mismatch in {dimension_id}: "
+                f"expected {dimension_size}, found {len(codes)}."
+            )
+
+        if len(codes) != len(set(codes)):
+            raise ValueError(
+                f"Duplicate category codes in {dimension_id}."
+            )
+
+        if not isinstance(labels, dict):
+            raise ValueError(
+                f"Invalid category labels in {dimension_id}."
+            )
+
+    dimension_positions = {
+        dimension_id: position
+        for position, dimension_id in enumerate(dimension_ids)
+    }
+
+    def get_stride(position: int) -> int:
+        """
+        Calculate the flattened JSON-stat stride.
+
+        The last dimension changes fastest in the flattened array.
+        """
+        return prod(dimension_sizes[position + 1:])
+
+    def build_lookup(dimension_id: str):
+        """Build a Spark lookup DataFrame for a dimension."""
+
         metadata = dimension_metadata[dimension_id]
 
         rows = [
-            (index, code, metadata["labels"].get(code, code))
+            (
+                index,
+                code,
+                metadata["labels"].get(code, code),
+            )
             for index, code in enumerate(metadata["codes"])
         ]
 
         return spark.createDataFrame(
             rows,
-            ["category_index", "category_code", "category_label"]
+            [
+                "category_index",
+                "category_code",
+                "category_label",
+            ],
         )
 
     bronze_schema = StructType([
-        StructField("position", LongType(), False),
-        StructField("average_monthly_rent_eur", DoubleType(), True),
+        StructField("position", LongType(), nullable=False),
+        StructField(
+            "average_monthly_rent_eur",
+            DoubleType(),
+            nullable=True,
+        ),
     ])
 
     base_df = spark.createDataFrame(
         list(enumerate(observations)),
-        bronze_schema
+        schema=bronze_schema,
     )
 
     for dimension_id in dimension_ids:
         position = dimension_positions[dimension_id]
         stride = get_stride(position)
 
+        index_column = f"index_{position}"
+
         base_df = base_df.withColumn(
-            f"index_{position}",
-            F.floor(
-                F.col("position") / F.lit(stride)
-            ) % F.lit(dimension_sizes[position])
+            index_column,
+            (
+                F.floor(
+                    F.col("position") / F.lit(stride)
+                )
+                % F.lit(dimension_sizes[position])
+            ).cast("integer"),
         )
 
         lookup_df = build_lookup(dimension_id).withColumnRenamed(
-            "category_index", f"index_{position}"
+            "category_index",
+            index_column,
         )
 
-        base_df = base_df.join(
-            F.broadcast(lookup_df),
-            on=f"index_{position}",
-            how="left"
-        ).withColumnRenamed(
-            "category_code", f"code_{position}"
-        ).withColumnRenamed(
-            "category_label", f"label_{position}"
+        base_df = (
+            base_df
+            .join(
+                F.broadcast(lookup_df),
+                on=index_column,
+                how="left",
+            )
+            .withColumnRenamed(
+                "category_code",
+                f"code_{position}",
+            )
+            .withColumnRenamed(
+                "category_label",
+                f"label_{position}",
+            )
         )
 
-    def code(dimension_id):
-        return F.col(
-            f"code_{dimension_positions[dimension_id]}"
-        )
+    def code(dimension_id: str):
+        position = dimension_positions[dimension_id]
+        return F.col(f"code_{position}")
 
-    def label(dimension_id):
-        return F.col(
-            f"label_{dimension_positions[dimension_id]}"
-        )
+    def label(dimension_id: str):
+        position = dimension_positions[dimension_id]
+        return F.col(f"label_{position}")
 
     bronze_df = base_df.select(
         code("STATISTIC").alias("statistic_code"),
