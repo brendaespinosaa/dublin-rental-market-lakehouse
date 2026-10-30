@@ -12,26 +12,29 @@ from src.transformations.silver import build_silver_dataframe
 
 
 @pytest.fixture(scope="session")
-def spark():
+def spark_session():
     """
-    Create a shared local Spark session for the test suite.
+    Reuse the existing Databricks Spark session when available.
+    Otherwise, create a local Spark session for automated testing.
     """
 
-    session = (
-        SparkSession.builder
-        .master("local[2]")
-        .appName("DublinRentalMarketTests")
-        .config("spark.ui.enabled", "false")
-        .config("spark.sql.shuffle.partitions", "2")
-        .config("spark.driver.bindAddress", "127.0.0.1")
-        .getOrCreate()
-    )
+    session = SparkSession.getActiveSession()
+    created_locally = session is None
 
-    session.sparkContext.setLogLevel("ERROR")
+    if created_locally:
+        session = (
+            SparkSession.builder
+            .master("local[2]")
+            .appName("DublinRentalMarketTests")
+            .config("spark.sql.shuffle.partitions", "2")
+            .config("spark.ui.enabled", "false")
+            .getOrCreate()
+        )
 
     yield session
 
-    session.stop()
+    if created_locally:
+        session.stop()
 
 
 @pytest.fixture
@@ -99,7 +102,7 @@ def sample_observations():
 
 @pytest.fixture
 def bronze_df(
-    spark,
+    spark_session,
     sample_jsonstat_metadata,
     sample_observations,
 ):
@@ -110,7 +113,7 @@ def bronze_df(
     dimension_ids, dimension_sizes, metadata = sample_jsonstat_metadata
 
     return build_bronze_dataframe(
-        spark=spark,
+        spark=spark_session,
         observations=sample_observations,
         dimension_ids=dimension_ids,
         dimension_sizes=dimension_sizes,
