@@ -1,3 +1,7 @@
+
+[![CI Pipeline](https://github.com/brendaespinosaa/dublin-rental-market-lakehouse/actions/workflows/tests.yml/badge.svg?branch=main)](https://github.com/brendaespinosaa/dublin-rental-market-lakehouse/actions/workflows/tests.yml)
+
+
 # Dublin Rental Market Lakehouse
 
 An end-to-end **Data Engineering project** built with Databricks, Apache Spark, PySpark, Delta Lake, and the Medallion Architecture.
